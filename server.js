@@ -18,6 +18,8 @@ app.use(cors());
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET", "POST"] },
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -30,7 +32,6 @@ app.get("/", (req, res) => {
 });
 
 // ─── In-memory online users ────────────────────────────────────────────────────
-// { socketId: { uid, name, photoUrl, email } }
 const onlineUsers = new Map();
 
 // ─── Helper: broadcast updated user list ──────────────────────────────────────
@@ -47,6 +48,7 @@ io.on("connection", (socket) => {
   socket.on("auth", async ({ idToken }) => {
     const user = await verifyToken(idToken);
     if (!user) {
+      console.log(`❌ Authentication failed for socket: ${socket.id}`);
       socket.emit("auth_error", "Invalid token");
       socket.disconnect();
       return;
@@ -55,15 +57,16 @@ io.on("connection", (socket) => {
     // Attach user info to socket
     socket.user = {
       uid: user.uid,
-      name: user.name || "Unknown",
-      email: user.email,
+      // ✅ Fallback: use email prefix if name is missing (email/password users)
+      name: user.name || user.email?.split("@")[0] || "Unknown",
+      email: user.email || "",
       photoUrl: user.picture || "",
     };
 
     onlineUsers.set(socket.id, socket.user);
     socket.emit("auth_success", socket.user);
-    broadcastUserList(); // notify all clients
-    console.log(`✅ Authenticated: ${socket.user.name}`);
+    broadcastUserList();
+    console.log(`✅ Authenticated [${socket.id}]: ${socket.user.name}`);
   });
 
   // 2️⃣ JOIN ROOM — for 1:1 chat
@@ -84,7 +87,7 @@ io.on("connection", (socket) => {
       read: false,
     };
 
-    // Relay to room (real-time)
+    // Relay to room in real-time
     io.to(roomId).emit("receive_message", message);
 
     // Persist to Firestore
@@ -120,6 +123,6 @@ io.on("connection", (socket) => {
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on port ${PORT} (all interfaces)`);
 });
